@@ -53,7 +53,12 @@ int main(int argc, char **argv, char **env) {
 
     // either simulation finished, or 'q' is pressed
     if ((Verilated::gotFinish()) || (vbdGetkey()=='q')) 
-      exit(0);
+    {
+        vbdClose();     // ++++
+        tfp->close(); 
+        printf("Exiting\n");
+        exit(0);
+    }
   }
 
   vbdClose();     // ++++
