@@ -43,116 +43,97 @@ Below is the whole design working, producing a sine wave at 9Hz:
 ![example1](images/Task1.jpg)
 
 ### Task 2
-In task 2, we are told to make an FSM following the below diagram:
-
-![example5](images/state_diag.jpg)
-
-The outputs change when state does, hence on each en == 1 state and output change.
+In task 2, we are told to use a dual port ROM to allow for a second waveform offset from the first. Hence addr1 stays as it was before, but now the testbench uses
+vbdValue() to offset addr2.
 
 ```Verilog
-module f1_fsm (
-    input   logic       rst,
-    input   logic       en,
-    input   logic       clk,
-    output  logic [7:0] data_out
+module rom #(
+    parameter ADDRESS_WIDTH = 8,
+              DATA_WIDTH = 8
+) (
+    input logic clk,
+    input logic [ADDRESS_WIDTH-1:0] addr1,
+    input logic [ADDRESS_WIDTH-1:0] addr2,
+    output logic [DATA_WIDTH-1:0] dout1,
+    output logic [DATA_WIDTH-1:0] dout2
 );
-    typedef enum {S0, S1, S2, S3, S4, S5, S6, S7, S8} state_t;
-    state_t myState;
+
+    logic [DATA_WIDTH-1:0] rom_array [2**ADDRESS_WIDTH-1:0];
+
+    initial begin
+        $display("Loading rom");
+        $readmemh("sinerom.mem", rom_array);
+    end
 
     always_ff @(posedge clk) begin
-        if (rst) begin
-            myState <= S0;
-            data_out <= 8'd0;
-        end else begin
-            case (myState)
-                S0: begin
-                    myState <= en ? S1 : S0;
-                    data_out <= en ? 8'h01 : 8'h00;
-                end
-                S1: begin
-                    myState <= en ? S2 : S1;
-                    data_out <= en ? 8'h03 : 8'h01;
-                end
-                S2: begin
-                    myState <= en ? S3 : S2;
-                    data_out <= en ? 8'h07 : 8'h03;
-                end
-                S3: begin
-                    myState <= en ? S4 : S3;
-                    data_out <= en ? 8'h0F : 8'h07;
-                end
-                S4: begin
-                    myState <= en ? S5 : S4;
-                    data_out <= en ? 8'h1F : 8'h0F;
-                end
-                S5: begin
-                    myState <= en ? S6 : S5;
-                    data_out <= en ? 8'h3F : 8'h1F;
-                end
-                S6: begin
-                    myState <= en ? S7 : S6;
-                    data_out <= en ? 8'h7F : 8'h3F;
-                end
-                S7: begin
-                    myState <= en ? S8 : S7;
-                    data_out <= en ? 8'hFF : 8'h7F;
-                end
-                S8: begin
-                    myState <= en ? S0 : S8;
-                    data_out <= en ? 8'h00 : 8'hFF;
-                end
-            endcase
-        end
+        dout1 <= rom_array[addr1];
+        dout2 <= rom_array[addr2];
     end
+
 endmodule
 ```
-
-Verification was also successful:
-![example6](images/Task2test.png)
-
-Next up came testing the fsm with the Vbuddy based off the code from Lab 2:
+```Verilog
+module sinegen (
+    input   logic clk,
+    input   logic en,
+    input   logic rst,
+    input   logic [7:0] incr,
+    input   logic [7:0] offset,
+    output  logic [7:0] dout1,
+    output  logic [7:0] dout2,
+);
+    wire [7:0] count;
+    counter #(8) counter_0 (clk, rst, en, incr, count);
+    rom #(8, 8) rom (clk, count, count+offset, dout1, dout2);
+endmodule
+```
 ```C++
 #include "verilated.h"
 #include "verilated_vcd_c.h"
-#include "Vf1_fsm.h"
+#include "Vsinegen.h"
 
-#include "vbuddy.cpp"     // include vbuddy code
+#include "vbuddy.cpp"    
 #define MAX_SIM_CYC 1000000
 
 int main(int argc, char **argv, char **env) {
-  int simcyc;     // simulation clock count
-  int tick;       // each clk cycle has two ticks for two edges
+  int i;     
+  int clk;       
 
   Verilated::commandArgs(argc, argv);
   // init top verilog instance
-  Vf1_fsm* top = new Vf1_fsm;
+  Vsinegen* top = new Vsinegen;
   // init trace dump
   Verilated::traceEverOn(true);
   VerilatedVcdC* tfp = new VerilatedVcdC;
   top->trace (tfp, 99);
-  tfp->open ("f1_fsm.vcd");
+  tfp->open ("sincos.vcd");
  
   // init Vbuddy
   if (vbdOpen()!=1) return(-1);
-  vbdHeader("L3T2: FSM");
-  vbdSetMode(1);        // Flag mode set to one-shot
+  vbdHeader("L2T2: SinCos");
+  //vbdSetMode(1);       
 
   // initialize simulation inputs
   top->clk = 1;
   top->rst = 0;
+  top->en = 1;
+  top->incr = 1; // constant increment of 1
 
   // run simulation for MAX_SIM_CYC clock cycles
-  for (simcyc=0; simcyc<MAX_SIM_CYC; simcyc++) {
+  for (i=0; i<MAX_SIM_CYC; i++) {
     // dump variables into VCD file and toggle clock
-    
-    for (tick=0; tick<2; tick++) {
-      tfp->dump (2*simcyc+tick);
+    for (clk=0; clk<2; clk++) {
+      tfp->dump (2*i+clk);
       top->clk = !top->clk;
       top->eval ();
     }
-    top->rst = (simcyc < 2); // assert reset for 1st cycle
-    vbdBar(top->data_out & 0xFF);
-    top->en = vbdFlag();
+    
+    top->offset = vbdValue(); // offset controlled by rotary on Vbuddy.
+    
+    vbdPlot(int (top->dout1), 0, 255);
+    vbdPlot(int (top->dout2), 0, 255); // This is the second data out of the ROM.
+    vbdCycle(i+1);
+
     // either simulation finished, or 'q' is pressed
     if ((Verilated::gotFinish()) || (vbdGetkey()=='q')) 
       exit(0);                // ... exit if finish OR 'q' pressed
@@ -164,14 +145,41 @@ int main(int argc, char **argv, char **env) {
 }
 ```
 
-With visual proof that the fsm works:
-![example10](images/vbuddy.jpg)
+As shown below this design works:
+
+![example9](images/Task2.jpg)
 
 ### Task 3
-Next up came studying the clktick module.
+Next up came storing audio and reading it out in a delayed manner. This can be accomplished with a dual port RAM.
+```Verilog
+module ram #(
+    parameter ADDRESS_WIDTH = 8,
+              DATA_WIDTH = 8
+) (
+    input logic clk,
+    input logic rd_en,
+    input logic [ADDRESS_WIDTH-1:0] rd_addr,
+    output logic [DATA_WIDTH-1:0] dout,
+    input logic wr_en,
+    input logic [ADDRESS_WIDTH-1:0] wr_addr,
+    input logic [DATA_WIDTH-1:0] din
+);
 
-The clktick module works by raising tick every N+1 cycles, which is achieved by using a count-down timer, which counts from N to 0, and when count==0, it raises tick and resets the counter, hence providing a tick every N+1 cycles.
+    logic [DATA_WIDTH-1:0] ram_array [2**ADDRESS_WIDTH-1:0];
 
-N is about 51 on my PC.
+    always_ff @(posedge clk) begin
+        if (rd_en) begin
+            dout <= ram_array[rd_addr];
+        end
+        if (wr_en) begin
+            ram_array[wr_addr] <= din;
+        end
+    end
 
-I then combined this with the FSM to produce clkfsm.sv, making a design where every ~1s, it raises en, changing fsm state of the fsm from task 2.
+endmodule
+```
+Now the write port of the RAM is controlled by the variable delay, hence the appearance as shown below:
+
+![example10](images/Task3.jpg)
+
+where it appears cut off at the beginning from the microphone signal, but then starts after 64 cycles (as that is the vbdValue here).
